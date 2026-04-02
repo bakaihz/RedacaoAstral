@@ -244,10 +244,11 @@ export default function App() {
     return (
       <div className="relative min-h-screen w-full bg-black overflow-x-hidden font-sans text-white">
         {/* Time Limit Modal */}
-        <AnimatePresence>
+        <AnimatePresence mode="wait">
           {showTimeModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <div key="time-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
               <motion.div
+                key="time-modal-content"
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -617,6 +618,7 @@ export default function App() {
             <AnimatePresence mode="wait">
               {message && (
                 <motion.div
+                  key={message.text}
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
@@ -624,7 +626,7 @@ export default function App() {
                     message.type === 'success' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}
                 >
-                  {message.text}
+                  {String(message.text)}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -695,10 +697,11 @@ export default function App() {
         </motion.div>
 
         {/* Saved Accounts Modal */}
-        <AnimatePresence>
+        <AnimatePresence mode="wait">
           {showSavedModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <div key="saved-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
               <motion.div
+                key="saved-modal-content"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
@@ -747,10 +750,11 @@ export default function App() {
         </AnimatePresence>
 
         {/* Discord Modal */}
-        <AnimatePresence>
+        <AnimatePresence mode="wait">
           {showDiscordModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <div key="discord-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
               <motion.div
+                key="discord-modal-content"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
