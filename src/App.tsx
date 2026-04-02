@@ -55,17 +55,27 @@ export default function App() {
 
       if (response.ok && data.success) {
         // Save account to localStorage
-        const newAccount = { ra, pass: password };
-        const existing = JSON.parse(localStorage.getItem('saved_accounts') || '[]');
-        const isDuplicate = existing.some((acc: any) => acc.ra === ra);
-        if (!isDuplicate) {
-          const updated = [...existing, newAccount];
-          localStorage.setItem('saved_accounts', JSON.stringify(updated));
-          setSavedAccounts(updated);
+        try {
+          const newAccount = { ra, pass: password };
+          const existingRaw = localStorage.getItem('saved_accounts');
+          let existing = [];
+          if (existingRaw) {
+            const parsed = JSON.parse(existingRaw);
+            existing = Array.isArray(parsed) ? parsed : [];
+          }
+          
+          const isDuplicate = existing.some((acc: any) => acc && acc.ra === ra);
+          if (!isDuplicate) {
+            const updated = [...existing, newAccount];
+            localStorage.setItem('saved_accounts', JSON.stringify(updated));
+            setSavedAccounts(updated);
+          }
+        } catch (e) {
+          console.error('Error saving account to localStorage:', e);
         }
 
-        setAuthToken(data.auth_token);
-        setUserNick(data.nick);
+        setAuthToken(String(data.auth_token));
+        setUserNick(String(data.nick || ra));
         setIsLoggedIn(true);
         setMessage({ type: 'success', text: 'Login bem sucedido!' });
         setTimeout(() => setShowTimeModal(true), 500);
@@ -80,14 +90,26 @@ export default function App() {
   };
 
   useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem('saved_accounts') || '[]');
-    setSavedAccounts(saved);
+    try {
+      const saved = localStorage.getItem('saved_accounts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setSavedAccounts(Array.isArray(parsed) ? parsed : []);
+      }
+    } catch (error) {
+      console.error('Error loading saved accounts:', error);
+      setSavedAccounts([]);
+    }
   }, []);
 
   const removeAccount = (raToRemove: string) => {
-    const updated = savedAccounts.filter(acc => acc.ra !== raToRemove);
-    localStorage.setItem('saved_accounts', JSON.stringify(updated));
-    setSavedAccounts(updated);
+    try {
+      const updated = savedAccounts.filter(acc => acc && acc.ra !== raToRemove);
+      localStorage.setItem('saved_accounts', JSON.stringify(updated));
+      setSavedAccounts(updated);
+    } catch (error) {
+      console.error('Error removing account:', error);
+    }
   };
 
   const fetchRooms = async () => {
@@ -439,7 +461,7 @@ export default function App() {
               <div className="mb-8">
                 <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 block ml-1">Sua Sala Astral</label>
                 <div className="flex flex-wrap gap-2">
-                  {rooms.map((room) => (
+                  {Array.isArray(rooms) && rooms.map((room) => room && (
                     <button
                       key={room.id}
                       onClick={() => setSelectedRoom(room.name)}
@@ -449,7 +471,7 @@ export default function App() {
                           : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
                       }`}
                     >
-                      {room.name}
+                      {String(room.name)}
                     </button>
                   ))}
                 </div>
@@ -472,9 +494,9 @@ export default function App() {
                     <div className="w-8 h-8 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin" />
                     <p className="text-sm animate-pulse">Sincronizando com o universo...</p>
                   </div>
-                ) : essays.length > 0 ? (
+                ) : (Array.isArray(essays) && essays.length > 0) ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {essays.map((essay) => (
+                    {essays.map((essay) => essay && (
                       <motion.div
                         key={essay.id}
                         initial={{ opacity: 0, y: 10 }}
@@ -484,9 +506,9 @@ export default function App() {
                         <div className="flex justify-between items-start mb-4">
                           <div className="flex-1 pr-4">
                             <h3 className="font-bold text-white group-hover:text-blue-400 transition-colors line-clamp-2 mb-1">
-                              {essay.title}
+                              {String(essay.title)}
                             </h3>
-                            <p className="text-xs text-gray-500">ID: {essay.id}</p>
+                            <p className="text-xs text-gray-500">ID: {String(essay.id)}</p>
                           </div>
                           <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
                             essay.answer_status === 'draft' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/20' : 'bg-blue-500/20 text-blue-400 border border-blue-500/20'
@@ -692,21 +714,21 @@ export default function App() {
                   </button>
                 </div>
                 <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {savedAccounts.map((acc, idx) => (
+                  {Array.isArray(savedAccounts) && savedAccounts.map((acc, idx) => acc && (
                     <div key={idx} className="flex items-center gap-2 group">
                       <button
                         onClick={() => {
-                          setRa(acc.ra);
-                          setPassword(acc.pass);
+                          setRa(acc.ra || '');
+                          setPassword(acc.pass || '');
                           setShowSavedModal(false);
                         }}
                         className="flex-1 flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 border border-white/5 rounded-2xl transition-all text-left"
                       >
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-400 font-bold text-xs">
-                            {acc.ra.substring(0, 2).toUpperCase()}
+                            {(String(acc.ra || '??')).substring(0, 2).toUpperCase()}
                           </div>
-                          <span className="text-sm font-medium text-gray-300">{acc.ra}</span>
+                          <span className="text-sm font-medium text-gray-300">{String(acc.ra)}</span>
                         </div>
                         <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-blue-400 transition-colors" />
                       </button>
