@@ -1,6 +1,11 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, FormEvent, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Lock, ArrowRight, Sparkles, BookOpen, Clock, LogOut, ChevronRight, Save, Trash2, ExternalLink } from 'lucide-react';
+import { 
+  User, Lock, ArrowRight, Sparkles, BookOpen, Clock, LogOut, 
+  ChevronRight, Save, Trash2, ExternalLink, LayoutGrid, 
+  FileText, CheckCircle2, AlertCircle, Loader2, X, 
+  ChevronLeft, Wand2, History, Settings, Info, Eye, EyeOff
+} from 'lucide-react';
 
 // Custom Discord Icon SVG
 const DiscordIcon = ({ className }: { className?: string }) => (
@@ -22,6 +27,7 @@ export default function App() {
   const [savedAccounts, setSavedAccounts] = useState<{ra: string, pass: string}[]>([]);
   const [showSavedModal, setShowSavedModal] = useState(false);
   const [showDiscordModal, setShowDiscordModal] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   
   // Auth & Data State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -30,7 +36,14 @@ export default function App() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<string>('');
   const [essays, setEssays] = useState<any[]>([]);
+  const [aggregatedEssays, setAggregatedEssays] = useState<any[]>([]);
   const [isFetchingData, setIsFetchingData] = useState(false);
+  const [showSelectionModal, setShowSelectionModal] = useState(false);
+  const [selectedEssays, setSelectedEssays] = useState<Set<string>>(new Set());
+  const [batchStatus, setBatchStatus] = useState<Record<string, 'pending' | 'processing' | 'success' | 'error'>>({});
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'settings'>('dashboard');
 
   // Writing View State
   const [selectedEssay, setSelectedEssay] = useState<any | null>(null);
@@ -38,6 +51,22 @@ export default function App() {
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
   const [generatedEssay, setGeneratedEssay] = useState<{titulo: string, texto: string} | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // Session Persistence
+  useEffect(() => {
+    const savedToken = localStorage.getItem('auth_token');
+    const savedNick = localStorage.getItem('user_nick');
+    const savedLimits = localStorage.getItem('time_limits');
+    
+    if (savedToken && savedNick) {
+      setAuthToken(savedToken);
+      setUserNick(savedNick);
+      setIsLoggedIn(true);
+      if (savedLimits) {
+        setTimeLimits(JSON.parse(savedLimits));
+      }
+    }
+  }, []);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -54,7 +83,12 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        // Save account to localStorage
+        // Save session to localStorage
+        localStorage.setItem('auth_token', String(data.auth_token));
+        localStorage.setItem('user_nick', String(data.nick || ra));
+        localStorage.setItem('time_limits', JSON.stringify(timeLimits));
+
+        // Save account to saved_accounts for quick access
         try {
           const newAccount = { ra, pass: password };
           const existingRaw = localStorage.getItem('saved_accounts');
@@ -82,8 +116,9 @@ export default function App() {
       } else {
         setMessage({ type: 'error', text: data.error || 'RA ou Senha incorretos.' });
       }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Erro ao conectar ao servidor.' });
+    } catch (error: any) {
+      console.error('Login error:', error);
+      setMessage({ type: 'error', text: 'Erro ao conectar ao servidor: ' + (error.message || 'Erro desconhecido') });
     } finally {
       setIsLoading(false);
     }
@@ -114,6 +149,7 @@ export default function App() {
 
   const fetchRooms = async () => {
     if (!authToken) return;
+    
     try {
       const response = await fetch('/api/rooms', {
         headers: { 'x-api-key': authToken }
@@ -121,18 +157,72 @@ export default function App() {
       const data = await response.json();
       if (Array.isArray(data)) {
         setRooms(data);
-        if (data.length > 0) {
+        if (data.length > 0 && !selectedRoom) {
           setSelectedRoom(data[0].name);
         }
+        return data;
       }
+      return [];
     } catch (error) {
       console.error('Error fetching rooms:', error);
+      return [];
+    }
+  };
+
+  const fetchUserRooms = async () => {
+    if (!authToken) return;
+    setIsFetchingData(true);
+    setMessage({ type: 'success', text: 'Buscando redações em todas as salas...' });
+
+    try {
+      // 1. Get all rooms
+      const allRooms = await fetchRooms();
+      const allAggregated: any[] = [];
+
+      // 2. For each room, fetch pending/draft essays
+      for (const room of allRooms) {
+        if (!room || !room.name) continue;
+        
+        try {
+          const response = await fetch(`/api/redacoes/pending?publication_target=${encodeURIComponent(room.name)}`, {
+            headers: { 'x-api-key': authToken }
+          });
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            // Add room info to each essay
+            const essaysWithRoom = data.map(e => ({
+              ...e,
+              publication_target: room.name
+            }));
+            allAggregated.push(...essaysWithRoom);
+          }
+        } catch (err) {
+          console.error(`Error fetching essays for room ${room.name}:`, err);
+        }
+      }
+
+      setAggregatedEssays(allAggregated);
+      setSelectedEssays(new Set());
+      setBatchStatus({});
+      setShowSelectionModal(true);
+      
+      if (allAggregated.length === 0) {
+        setMessage({ type: 'error', text: 'Nenhuma redação pendente encontrada em nenhuma sala.' });
+      } else {
+        setMessage({ type: 'success', text: `${allAggregated.length} redações encontradas!` });
+      }
+    } catch (error) {
+      console.error('Error in fetchUserRooms:', error);
+      setMessage({ type: 'error', text: 'Erro ao buscar redações.' });
+    } finally {
+      setIsFetchingData(false);
     }
   };
 
   const fetchEssays = async (roomName: string) => {
     if (!authToken || !roomName) return;
     setIsFetchingData(true);
+
     try {
       const response = await fetch(`/api/redacoes/pending?publication_target=${encodeURIComponent(roomName)}`, {
         headers: { 'x-api-key': authToken }
@@ -145,6 +235,106 @@ export default function App() {
       console.error('Error fetching essays:', error);
     } finally {
       setIsFetchingData(false);
+    }
+  };
+
+  const stripHtml = (html: string) => {
+    if (!html) return '';
+    // Replace images with [IMAGEM]
+    let text = html.replace(/<img[^>]*>/gi, ' [IMAGEM] ');
+    // Remove all other tags
+    text = text.replace(/<[^>]*>/g, '');
+    // Decode entities (basic)
+    text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    return text.trim();
+  };
+
+  const handleBatchProcess = async () => {
+    if (selectedEssays.size === 0) return;
+    setIsBatchProcessing(true);
+    
+    const essayArray = aggregatedEssays.filter(e => selectedEssays.has(e.id));
+    setBatchProgress({ current: 0, total: essayArray.length });
+    
+    const newStatus = { ...batchStatus };
+    essayArray.forEach(e => newStatus[e.id] = 'pending');
+    setBatchStatus(newStatus);
+
+    for (let i = 0; i < essayArray.length; i++) {
+      const essay = essayArray[i];
+      setBatchProgress(prev => ({ ...prev, current: i + 1 }));
+      setBatchStatus(prev => ({ ...prev, [essay.id]: 'processing' }));
+      
+      try {
+        // 1. Get Details (getTaskDetails)
+        const detailsRes = await fetch(`/api/redacao/${essay.id}/detalhes?room_name=${encodeURIComponent(essay.publication_target)}`, {
+          headers: { 'x-api-key': authToken }
+        });
+        const details = await detailsRes.json();
+
+        // 2. Build Prompt (stripHtml and format)
+        const enunciado = stripHtml(details.description || '');
+        const motivadores = details.essay_motivation_texts?.map((t: any, idx: number) => `TEXTO ${idx + 1}: ${stripHtml(t.text)}`).join('\n') || '';
+        const prompt = `ENUNCIADO: ${enunciado}\n\n${motivadores}`;
+
+        // 3. Generate AI
+        const aiRes = await fetch('/api/gerar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            genero: details.essay_genre_name,
+            contexto: prompt
+          })
+        });
+        const aiData = await aiRes.json();
+
+        // 4. Save Draft (Complete)
+        const saveRes = await fetch('/api/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_id: essay.id,
+            question_id: details.questions?.[0]?.id,
+            room_for_apply: essay.publication_target,
+            auth_token: authToken,
+            titulo: aiData.titulo,
+            texto: aiData.texto,
+            answer_id: essay.answer_id
+          })
+        });
+        
+        if (saveRes.ok) {
+          setBatchStatus(prev => ({ ...prev, [essay.id]: 'success' }));
+        } else {
+          setBatchStatus(prev => ({ ...prev, [essay.id]: 'error' }));
+        }
+      } catch (error) {
+        console.error(`Error processing essay ${essay.id}:`, error);
+        setBatchStatus(prev => ({ ...prev, [essay.id]: 'error' }));
+      }
+    }
+    
+    setIsBatchProcessing(false);
+    setTimeout(() => {
+      if (selectedRoom) fetchEssays(selectedRoom);
+    }, 2000);
+  };
+
+  const toggleEssaySelection = (id: string) => {
+    const newSelected = new Set(selectedEssays);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedEssays(newSelected);
+  };
+
+  const selectAllEssays = () => {
+    if (selectedEssays.size === aggregatedEssays.length) {
+      setSelectedEssays(new Set());
+    } else {
+      setSelectedEssays(new Set(aggregatedEssays.map(e => e.id)));
     }
   };
 
@@ -168,13 +358,16 @@ export default function App() {
     if (!essayDetails) return;
     setIsGenerating(true);
     try {
-      const context = `Enunciado: ${essayDetails.description}\n\nTextos Motivadores: ${essayDetails.essay_motivation_texts?.map((t: any) => t.text).join('\n')}`;
+      const enunciado = stripHtml(essayDetails.description || '');
+      const motivadores = essayDetails.essay_motivation_texts?.map((t: any, idx: number) => `TEXTO ${idx + 1}: ${stripHtml(t.text)}`).join('\n') || '';
+      const prompt = `ENUNCIADO: ${enunciado}\n\n${motivadores}`;
+
       const response = await fetch('/api/gerar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           genero: essayDetails.essay_genre_name,
-          contexto: context
+          contexto: prompt
         })
       });
       const data = await response.json();
@@ -190,16 +383,17 @@ export default function App() {
     if (!selectedEssay || !essayDetails || !generatedEssay) return;
     setIsLoading(true);
     try {
-      const response = await fetch('/api/salvar/rascunho', {
+      const response = await fetch('/api/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task_id: selectedEssay.id,
           question_id: essayDetails.questions?.[0]?.id,
-          room_name: selectedRoom,
-          token_usuario: authToken,
+          room_for_apply: selectedRoom,
+          auth_token: authToken,
           titulo: generatedEssay.titulo,
-          texto: generatedEssay.texto
+          texto: generatedEssay.texto,
+          answer_id: selectedEssay.answer_id
         })
       });
       const data = await response.json();
@@ -211,9 +405,12 @@ export default function App() {
           setEssayDetails(null);
           fetchEssays(selectedRoom);
         }, 2000);
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Erro ao salvar rascunho.' });
       }
     } catch (error) {
       console.error('Error saving draft:', error);
+      setMessage({ type: 'error', text: 'Erro ao conectar ao servidor.' });
     } finally {
       setIsLoading(false);
     }
@@ -232,6 +429,8 @@ export default function App() {
   }, [selectedRoom]);
 
   const handleLogout = () => {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('user_nick');
     setIsLoggedIn(false);
     setAuthToken('');
     setEssays([]);
@@ -240,307 +439,489 @@ export default function App() {
     setSelectedEssay(null);
   };
 
+  const stats = useMemo(() => {
+    return {
+      total: essays.length,
+      pending: essays.filter(e => e.answer_status === 'pending').length,
+      drafts: essays.filter(e => e.answer_status === 'draft').length
+    };
+  }, [essays]);
+
   if (isLoggedIn) {
     return (
-      <div className="relative min-h-screen w-full bg-black overflow-x-hidden font-sans text-white">
-        {/* Time Limit Modal */}
-        <AnimatePresence mode="wait">
-          {showTimeModal && (
-            <div key="time-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
-              <motion.div
-                key="time-modal-content"
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-zinc-900 border border-blue-500/30 rounded-3xl p-8 max-w-sm w-full shadow-[0_0_50px_-12px_rgba(59,130,246,0.5)]"
-              >
-                <div className="flex flex-col items-center text-center">
-                  <div className="w-16 h-16 bg-blue-600/20 rounded-full flex items-center justify-center mb-6 border border-blue-500/20">
-                    <Sparkles className="w-8 h-8 text-blue-400" />
-                  </div>
-                  <h3 className="text-2xl font-display font-bold text-white mb-2">Prazos de Entrega</h3>
-                  <p className="text-gray-400 text-sm mb-8">Fique atento aos limites de tempo para sua redação astral.</p>
-                  
-                  <div className="grid grid-cols-2 gap-4 w-full mb-8">
-                    <div className="bg-black/40 border border-white/5 p-4 rounded-2xl">
-                      <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1">Mínimo (min)</p>
-                      <input 
-                        type="number" 
-                        value={timeLimits.min}
-                        onChange={(e) => setTimeLimits({...timeLimits, min: e.target.value})}
-                        className="bg-transparent text-blue-400 font-display font-bold text-lg w-full text-center focus:outline-none"
-                      />
-                    </div>
-                    <div className="bg-black/40 border border-white/5 p-4 rounded-2xl">
-                      <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1">Máximo (min)</p>
-                      <input 
-                        type="number" 
-                        value={timeLimits.max}
-                        onChange={(e) => setTimeLimits({...timeLimits, max: e.target.value})}
-                        className="bg-transparent text-blue-400 font-display font-bold text-lg w-full text-center focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setShowTimeModal(false)}
-                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-all active:scale-95 shadow-lg shadow-blue-600/20"
-                  >
-                    Entendido
-                  </button>
-                </div>
-              </motion.div>
+      <div className="relative min-h-screen w-full bg-black overflow-x-hidden font-sans text-white flex">
+        {/* Sidebar */}
+        <aside className="w-20 lg:w-64 border-r border-white/10 bg-zinc-950/50 backdrop-blur-xl flex flex-col z-30 sticky top-0 h-screen">
+          <div className="p-6 flex items-center gap-3">
+            <div className="p-2 bg-blue-600/20 rounded-xl border border-blue-500/20">
+              <Sparkles className="w-6 h-6 text-blue-400" />
             </div>
-          )}
-        </AnimatePresence>
+            <h1 className="hidden lg:block text-xl font-display font-bold tracking-tight">
+              Astral <span className="text-blue-500">SP</span>
+            </h1>
+          </div>
 
-        {/* Header */}
-        <header className="relative z-10 border-b border-white/10 bg-black/50 backdrop-blur-md sticky top-0">
-          <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-600/20 rounded-lg border border-blue-500/20">
-                <Sparkles className="w-5 h-5 text-blue-400" />
+          <nav className="flex-1 px-4 py-6 space-y-2">
+            <button 
+              onClick={() => {setActiveTab('dashboard'); setSelectedEssay(null);}}
+              className={`w-full flex items-center gap-4 p-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:bg-white/5 hover:text-white'}`}
+            >
+              <LayoutGrid className="w-6 h-6" />
+              <span className="hidden lg:block font-bold text-sm">Dashboard</span>
+            </button>
+            <button 
+              onClick={() => {setActiveTab('history'); setSelectedEssay(null);}}
+              className={`w-full flex items-center gap-4 p-3 rounded-xl transition-all ${activeTab === 'history' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:bg-white/5 hover:text-white'}`}
+            >
+              <History className="w-6 h-6" />
+              <span className="hidden lg:block font-bold text-sm">Rascunhos</span>
+            </button>
+            <button 
+              onClick={() => {setActiveTab('settings'); setSelectedEssay(null);}}
+              className={`w-full flex items-center gap-4 p-3 rounded-xl transition-all ${activeTab === 'settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:bg-white/5 hover:text-white'}`}
+            >
+              <Settings className="w-6 h-6" />
+              <span className="hidden lg:block font-bold text-sm">Configurações</span>
+            </button>
+          </nav>
+
+          <div className="p-4 border-t border-white/10">
+            <div className="hidden lg:flex items-center gap-3 p-3 mb-4 bg-white/5 rounded-2xl border border-white/5">
+              <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center text-blue-400 font-bold">
+                {userNick.substring(0, 2).toUpperCase()}
               </div>
-              <div>
-                <h1 className="text-lg font-bold tracking-tight">Redação SP <span className="text-blue-500">Astral</span></h1>
-                <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Olá, {userNick}</p>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-white truncate">{userNick}</p>
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Estudante Astral</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <button 
+              onClick={handleLogout}
+              className="w-full flex items-center gap-4 p-3 rounded-xl text-red-500 hover:bg-red-500/10 transition-all"
+            >
+              <LogOut className="w-6 h-6" />
+              <span className="hidden lg:block font-bold text-sm">Sair</span>
+            </button>
+          </div>
+        </aside>
+
+        {/* Main Content */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          <header className="h-20 border-b border-white/10 bg-black/50 backdrop-blur-md flex items-center justify-between px-8 sticky top-0 z-20">
+            <div className="flex items-center gap-4">
               {selectedEssay && (
                 <button 
                   onClick={() => {setSelectedEssay(null); setGeneratedEssay(null); setEssayDetails(null);}}
-                  className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold transition-all border border-white/10"
+                  className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-white"
                 >
-                  Voltar
+                  <ChevronLeft className="w-6 h-6" />
                 </button>
               )}
+              <h2 className="text-xl font-display font-bold text-white">
+                {selectedEssay ? 'Escrevendo Redação' : activeTab === 'dashboard' ? 'Dashboard' : activeTab === 'history' ? 'Meus Rascunhos' : 'Configurações'}
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="hidden md:flex items-center gap-6 px-6 py-2 bg-white/5 border border-white/10 rounded-2xl">
+                <div className="text-center">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Total</p>
+                  <p className="text-sm font-display font-bold text-white">{stats.total}</p>
+                </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="text-center">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Pendentes</p>
+                  <p className="text-sm font-display font-bold text-blue-400">{stats.pending}</p>
+                </div>
+                <div className="w-px h-8 bg-white/10" />
+                <div className="text-center">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Rascunhos</p>
+                  <p className="text-sm font-display font-bold text-amber-400">{stats.drafts}</p>
+                </div>
+              </div>
+              
               <button 
-                onClick={handleLogout}
-                className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-400 hover:text-white"
+                onClick={() => setShowTimeModal(true)}
+                className="p-3 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/20 rounded-xl text-blue-400 transition-all"
               >
-                <LogOut className="w-5 h-5" />
+                <Clock className="w-5 h-5" />
               </button>
             </div>
-          </div>
-        </header>
+          </header>
 
-        <main className="relative z-10 max-w-5xl mx-auto px-6 py-8">
-          {selectedEssay ? (
-            <div className="space-y-6">
-              {/* Writing View */}
-              <div className="bg-white/5 border border-white/10 rounded-3xl p-8">
-                <div className="flex justify-between items-start mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-white mb-2">{selectedEssay.title}</h2>
-                    <div className="flex gap-3">
-                      <span className="text-xs bg-blue-600/20 text-blue-400 px-2 py-1 rounded border border-blue-500/20 font-bold">
-                        {essayDetails?.essay_genre_name || 'Carregando...'}
-                      </span>
-                      <span className="text-xs bg-white/5 text-gray-400 px-2 py-1 rounded border border-white/10 font-bold">
-                        {essayDetails?.min_words || 0} - {essayDetails?.max_words || 0} palavras
-                      </span>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={handleGenerateEssay}
-                    disabled={isGenerating || isFetchingDetails}
-                    className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-blue-600/20"
-                  >
-                    {isGenerating ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    Gerar com IA
-                  </button>
-                </div>
-
-                {isFetchingDetails ? (
-                  <div className="py-20 flex flex-col items-center justify-center text-gray-500 gap-4">
-                    <div className="w-8 h-8 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin" />
-                    <p className="text-sm">Buscando detalhes da redação...</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Instructions/Motivation */}
-                    <div className="space-y-6">
-                      <div className="bg-black/40 border border-white/5 rounded-2xl p-6">
-                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Enunciado</h4>
-                        <div className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
-                          {essayDetails?.description}
+          <main className="flex-1 p-8 overflow-y-auto custom-scrollbar">
+            <AnimatePresence mode="wait">
+              {selectedEssay ? (
+                <motion.div 
+                  key="writing-view"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="max-w-6xl mx-auto"
+                >
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    {/* Left Panel: Reference */}
+                    <div className="lg:col-span-5 space-y-6">
+                      <div className="glass-card rounded-3xl p-8">
+                        <div className="mb-8">
+                          <h3 className="text-2xl font-display font-bold text-white mb-4 leading-tight">{selectedEssay.title}</h3>
+                          <div className="flex flex-wrap gap-2">
+                            <span className="text-[10px] uppercase tracking-widest font-bold bg-blue-600/20 text-blue-400 px-3 py-1.5 rounded-lg border border-blue-500/20">
+                              {essayDetails?.essay_genre_name || 'Carregando...'}
+                            </span>
+                            <span className="text-[10px] uppercase tracking-widest font-bold bg-white/5 text-gray-400 px-3 py-1.5 rounded-lg border border-white/10">
+                              {essayDetails?.min_words || 0} - {essayDetails?.max_words || 0} palavras
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="bg-black/40 border border-white/5 rounded-2xl p-6">
-                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Textos Motivadores</h4>
-                        <div className="space-y-4">
-                          {essayDetails?.essay_motivation_texts?.map((text: any, idx: number) => (
-                            <div key={idx} className="text-xs text-gray-400 leading-relaxed italic border-l-2 border-blue-500/30 pl-4">
-                              {text.text}
-                            </div>
-                          ))}
-                        </div>
+
+                        {isFetchingDetails ? (
+                          <div className="py-20 flex flex-col items-center justify-center text-gray-500 gap-4">
+                            <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                            <p className="text-sm">Buscando detalhes do universo...</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-8">
+                            <section>
+                              <h4 className="text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-4 flex items-center gap-2">
+                                <Info className="w-4 h-4" />
+                                Enunciado da Missão
+                              </h4>
+                              <div className="text-sm text-gray-300 leading-relaxed bg-black/40 rounded-2xl p-6 border border-white/5">
+                                {essayDetails?.description}
+                              </div>
+                            </section>
+
+                            <section>
+                              <h4 className="text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-4 flex items-center gap-2">
+                                <FileText className="w-4 h-4" />
+                                Textos de Apoio
+                              </h4>
+                              <div className="space-y-4">
+                                {essayDetails?.essay_motivation_texts?.map((text: any, idx: number) => (
+                                  <div key={idx} className="text-xs text-gray-400 leading-relaxed italic bg-white/5 rounded-2xl p-6 border-l-4 border-blue-500/50">
+                                    {text.text}
+                                  </div>
+                                ))}
+                              </div>
+                            </section>
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    {/* Editor/Result */}
-                    <div className="space-y-6">
-                      {generatedEssay ? (
-                        <motion.div 
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="bg-white/5 border border-blue-500/30 rounded-2xl p-6 space-y-4"
-                        >
-                          <h4 className="text-xs font-bold text-blue-400 uppercase tracking-widest">Resultado da IA</h4>
-                          <input 
-                            value={generatedEssay.titulo}
-                            onChange={(e) => setGeneratedEssay({...generatedEssay, titulo: e.target.value})}
-                            className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-lg font-bold text-white focus:outline-none focus:border-blue-500"
-                            placeholder="Título da Redação"
-                          />
-                          <textarea 
-                            value={generatedEssay.texto}
-                            onChange={(e) => setGeneratedEssay({...generatedEssay, texto: e.target.value})}
-                            className="w-full h-[400px] bg-black/40 border border-white/10 rounded-xl p-4 text-sm text-gray-300 leading-relaxed focus:outline-none focus:border-blue-500 resize-none"
-                            placeholder="Texto da Redação"
-                          />
+                    {/* Right Panel: Editor */}
+                    <div className="lg:col-span-7 space-y-6">
+                      <div className="glass-card rounded-3xl p-8 h-full flex flex-col">
+                        <div className="flex items-center justify-between mb-8">
+                          <h3 className="text-xl font-display font-bold text-white flex items-center gap-3">
+                            <Wand2 className="w-6 h-6 text-blue-400" />
+                            Editor Astral
+                          </h3>
                           <button 
-                            onClick={handleSaveDraft}
-                            disabled={isLoading}
-                            className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white py-4 rounded-xl font-bold transition-all shadow-lg shadow-green-600/20 flex items-center justify-center gap-2"
+                            onClick={handleGenerateEssay}
+                            disabled={isGenerating || isFetchingDetails}
+                            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-blue-600/20 active:scale-95"
                           >
-                            {isLoading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'Salvar como Rascunho'}
+                            {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                            Gerar com IA
                           </button>
-                        </motion.div>
-                      ) : (
-                        <div className="h-full min-h-[400px] border-2 border-dashed border-white/5 rounded-2xl flex flex-col items-center justify-center text-center p-8 text-gray-600">
-                          <Sparkles className="w-12 h-12 mb-4 opacity-20" />
-                          <p className="text-sm">Clique em "Gerar com IA" para criar sua redação astral automaticamente.</p>
                         </div>
-                      )}
+
+                        <div className="flex-1 space-y-4">
+                          {generatedEssay ? (
+                            <motion.div 
+                              initial={{ opacity: 0, scale: 0.98 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="space-y-4 h-full flex flex-col"
+                            >
+                              <input 
+                                value={generatedEssay.titulo}
+                                onChange={(e) => setGeneratedEssay({...generatedEssay, titulo: e.target.value})}
+                                className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-xl font-display font-bold text-white focus:outline-none focus:border-blue-500 transition-all"
+                                placeholder="Título da sua obra..."
+                              />
+                              <textarea 
+                                value={generatedEssay.texto}
+                                onChange={(e) => setGeneratedEssay({...generatedEssay, texto: e.target.value})}
+                                className="flex-1 w-full min-h-[500px] bg-black/40 border border-white/10 rounded-2xl p-6 text-sm text-gray-300 leading-relaxed focus:outline-none focus:border-blue-500 resize-none custom-scrollbar transition-all"
+                                placeholder="Comece a escrever ou use a IA para guiar seus pensamentos..."
+                              />
+                              <button 
+                                onClick={handleSaveDraft}
+                                disabled={isLoading}
+                                className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white py-4 rounded-2xl font-bold transition-all shadow-lg shadow-green-600/20 flex items-center justify-center gap-3 active:scale-[0.98]"
+                              >
+                                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                                Salvar Rascunho Astral
+                              </button>
+                            </motion.div>
+                          ) : (
+                            <div className="flex-1 border-2 border-dashed border-white/5 rounded-3xl flex flex-col items-center justify-center text-center p-12 text-gray-600">
+                              <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mb-6 animate-pulse-slow">
+                                <Sparkles className="w-10 h-10 opacity-20" />
+                              </div>
+                              <h4 className="text-lg font-bold text-gray-400 mb-2">Editor Vazio</h4>
+                              <p className="text-sm max-w-xs">Use o poder da IA para manifestar sua redação ou comece a escrever sua própria jornada acadêmica.</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Time Limits Banner */}
-              <div className="mb-8 bg-gradient-to-r from-blue-900/20 to-transparent border border-blue-500/20 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div>
-                  <h2 className="text-xl font-bold mb-1 flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-blue-400" />
-                    Prazos de Entrega
-                  </h2>
-                  <p className="text-sm text-gray-400">Mantenha o equilíbrio entre o tempo e a qualidade astral.</p>
-                </div>
-                <div className="flex gap-4">
-                  <div className="bg-black/40 border border-white/5 px-6 py-3 rounded-2xl group relative">
-                    <p className="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-0.5">Mínimo</p>
-                    <div className="flex items-center gap-1">
-                      <input 
-                        type="number"
-                        value={timeLimits.min}
-                        onChange={(e) => setTimeLimits({...timeLimits, min: e.target.value})}
-                        className="bg-transparent text-blue-400 font-bold w-12 focus:outline-none"
-                      />
-                      <span className="text-xs text-gray-600">min</span>
+                </motion.div>
+              ) : activeTab === 'dashboard' ? (
+                <motion.div 
+                  key="dashboard-view"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-8"
+                >
+                  {/* Room Selection Sidebar/Bar */}
+                  <div className="flex items-center gap-4 overflow-x-auto pb-4 custom-scrollbar no-scrollbar">
+                    {Array.isArray(rooms) && rooms.map((room) => room && (
+                      <button
+                        key={room.id}
+                        onClick={() => setSelectedRoom(room.name)}
+                        className={`whitespace-nowrap px-6 py-3 rounded-2xl text-sm font-bold transition-all border ${
+                          selectedRoom === room.name 
+                            ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
+                            : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        {String(room.name)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Stats Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="glass-card rounded-3xl p-6 flex items-center gap-6">
+                      <div className="p-4 bg-blue-600/20 rounded-2xl border border-blue-500/20">
+                        <BookOpen className="w-8 h-8 text-blue-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Pendentes</p>
+                        <p className="text-3xl font-display font-bold text-white">{stats.pending}</p>
+                      </div>
+                    </div>
+                    <div className="glass-card rounded-3xl p-6 flex items-center gap-6">
+                      <div className="p-4 bg-amber-600/20 rounded-2xl border border-amber-500/20">
+                        <FileText className="w-8 h-8 text-amber-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Rascunhos</p>
+                        <p className="text-3xl font-display font-bold text-white">{stats.drafts}</p>
+                      </div>
+                    </div>
+                    <div className="glass-card rounded-3xl p-6 flex items-center gap-6">
+                      <div className="p-4 bg-green-600/20 rounded-2xl border border-green-500/20">
+                        <CheckCircle2 className="w-8 h-8 text-green-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Concluídas</p>
+                        <p className="text-3xl font-display font-bold text-white">0</p>
+                      </div>
                     </div>
                   </div>
-                  <div className="bg-black/40 border border-white/5 px-6 py-3 rounded-2xl group relative">
-                    <p className="text-[9px] uppercase tracking-widest text-gray-500 font-bold mb-0.5">Máximo</p>
-                    <div className="flex items-center gap-1">
-                      <input 
-                        type="number"
-                        value={timeLimits.max}
-                        onChange={(e) => setTimeLimits({...timeLimits, max: e.target.value})}
-                        className="bg-transparent text-blue-400 font-bold w-12 focus:outline-none"
-                      />
-                      <span className="text-xs text-gray-600">min</span>
+
+                  {/* Essay Grid */}
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-display font-bold text-white flex items-center gap-3">
+                        <LayoutGrid className="w-6 h-6 text-blue-400" />
+                        Redações Disponíveis
+                      </h3>
+                      <div className="flex items-center gap-4">
+                        <button 
+                          onClick={fetchUserRooms}
+                          disabled={isFetchingData}
+                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg shadow-blue-600/20 text-sm font-bold transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50"
+                        >
+                          {isFetchingData ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                          Redação Pendente
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setAggregatedEssays(essays);
+                            setShowSelectionModal(true);
+                          }}
+                          className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl border border-white/10 text-sm font-bold transition-all flex items-center gap-2"
+                        >
+                          <Wand2 className="w-4 h-4" />
+                          Processar em Lote
+                        </button>
+                      </div>
                     </div>
+
+                    {isFetchingData ? (
+                      <div className="py-32 flex flex-col items-center justify-center text-gray-500 gap-6">
+                        <div className="relative">
+                          <Loader2 className="w-12 h-12 animate-spin text-blue-500" />
+                          <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-blue-400 animate-pulse" />
+                        </div>
+                        <p className="text-sm font-medium animate-pulse">Sincronizando com o universo acadêmico...</p>
+                      </div>
+                    ) : (Array.isArray(essays) && essays.length > 0) ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                        {essays.map((essay, idx) => essay && (
+                          <motion.div
+                            key={essay.id}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: idx * 0.05 }}
+                            className="glass-card rounded-3xl p-6 flex flex-col h-full group"
+                          >
+                            <div className="flex justify-between items-start mb-4">
+                              <div className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${
+                                essay.answer_status === 'draft' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/20' : 'bg-blue-500/20 text-blue-400 border border-blue-500/20'
+                              }`}>
+                                {essay.answer_status === 'draft' ? 'Rascunho' : 'Pendente'}
+                              </div>
+                              <p className="text-[10px] text-gray-600 font-bold">ID: {essay.id}</p>
+                            </div>
+                            
+                            <h4 className="text-lg font-display font-bold text-white mb-6 line-clamp-2 group-hover:text-blue-400 transition-colors">
+                              {essay.title}
+                            </h4>
+
+                            <div className="mt-auto pt-6 border-t border-white/5 flex items-center justify-between">
+                              <div className="flex items-center gap-2 text-gray-500">
+                                <Clock className="w-4 h-4" />
+                                <span className="text-[10px] font-bold uppercase tracking-widest">Expira em 7 dias</span>
+                              </div>
+                              <button 
+                                onClick={() => handleStartEssay(essay)}
+                                className="p-3 bg-white/5 hover:bg-blue-600 rounded-2xl text-gray-400 hover:text-white transition-all border border-white/5 hover:border-blue-500 active:scale-90"
+                              >
+                                <ChevronRight className="w-5 h-5" />
+                              </button>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="glass-card rounded-[40px] py-32 flex flex-col items-center justify-center text-center px-12">
+                        <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-8 border border-white/5">
+                          <BookOpen className="w-12 h-12 text-gray-700" />
+                        </div>
+                        <h3 className="text-2xl font-display font-bold text-gray-300 mb-3">Nenhuma tarefa encontrada</h3>
+                        <p className="text-gray-500 max-w-sm leading-relaxed">Seu universo acadêmico está em harmonia. Não há redações pendentes ou rascunhos nesta sala no momento.</p>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
-
-              {/* Room Selection */}
-              <div className="mb-8">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 block ml-1">Sua Sala Astral</label>
-                <div className="flex flex-wrap gap-2">
-                  {Array.isArray(rooms) && rooms.map((room) => room && (
-                    <button
-                      key={room.id}
-                      onClick={() => setSelectedRoom(room.name)}
-                      className={`px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
-                        selectedRoom === room.name 
-                          ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' 
-                          : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
-                      }`}
-                    >
-                      {String(room.name)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Essays List */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-lg font-bold flex items-center gap-2">
-                    <BookOpen className="w-5 h-5 text-blue-400" />
-                    Redações Pendentes
-                  </h2>
-                  <span className="text-xs bg-blue-600/20 text-blue-400 px-2 py-1 rounded-md border border-blue-500/20 font-bold">
-                    {essays.length} Encontradas
-                  </span>
-                </div>
-
-                {isFetchingData ? (
-                  <div className="py-20 flex flex-col items-center justify-center text-gray-500 gap-4">
-                    <div className="w-8 h-8 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin" />
-                    <p className="text-sm animate-pulse">Sincronizando com o universo...</p>
-                  </div>
-                ) : (Array.isArray(essays) && essays.length > 0) ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {essays.map((essay) => essay && (
+                </motion.div>
+              ) : activeTab === 'history' ? (
+                <motion.div 
+                  key="history-view"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-6"
+                >
+                  {/* Filter only drafts */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {essays.filter(e => e.answer_status === 'draft').map((essay, idx) => (
                       <motion.div
                         key={essay.id}
-                        initial={{ opacity: 0, y: 10 }}
+                        initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="bg-white/5 border border-white/10 rounded-2xl p-5 hover:border-blue-500/30 transition-all group"
+                        transition={{ delay: idx * 0.05 }}
+                        className="glass-card rounded-3xl p-6 flex flex-col group"
                       >
                         <div className="flex justify-between items-start mb-4">
-                          <div className="flex-1 pr-4">
-                            <h3 className="font-bold text-white group-hover:text-blue-400 transition-colors line-clamp-2 mb-1">
-                              {String(essay.title)}
-                            </h3>
-                            <p className="text-xs text-gray-500">ID: {String(essay.id)}</p>
-                          </div>
-                          <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
-                            essay.answer_status === 'draft' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/20' : 'bg-blue-500/20 text-blue-400 border border-blue-500/20'
-                          }`}>
-                            {essay.answer_status === 'draft' ? 'Rascunho' : 'Pendente'}
-                          </div>
+                          <span className="px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/20">
+                            Rascunho
+                          </span>
+                          <p className="text-[10px] text-gray-600 font-bold">ID: {essay.id}</p>
                         </div>
-                        
+                        <h4 className="text-lg font-display font-bold text-white mb-6 line-clamp-2">{essay.title}</h4>
                         <button 
                           onClick={() => handleStartEssay(essay)}
-                          className="w-full bg-white/5 hover:bg-blue-600 border border-white/10 hover:border-blue-500 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 group/btn"
+                          className="w-full py-3 bg-white/5 hover:bg-amber-600/20 border border-white/5 hover:border-amber-500/30 rounded-2xl text-sm font-bold text-gray-400 hover:text-amber-400 transition-all flex items-center justify-center gap-2"
                         >
-                          Fazer Redação
-                          <ChevronRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" />
+                          Continuar Editando
+                          <ChevronRight className="w-4 h-4" />
                         </button>
                       </motion.div>
                     ))}
+                    {essays.filter(e => e.answer_status === 'draft').length === 0 && (
+                      <div className="col-span-full py-32 text-center">
+                        <p className="text-gray-500">Nenhum rascunho encontrado.</p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="bg-white/5 border border-dashed border-white/10 rounded-3xl py-20 flex flex-col items-center justify-center text-center px-6">
-                    <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4">
-                      <BookOpen className="w-8 h-8 text-gray-600" />
-                    </div>
-                    <h3 className="text-lg font-bold text-gray-300 mb-1">Nenhuma redação pendente</h3>
-                    <p className="text-sm text-gray-500 max-w-xs">Seu universo acadêmico está em harmonia. Nenhuma tarefa encontrada para esta sala.</p>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="settings-view"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="max-w-2xl mx-auto space-y-8"
+                >
+                  <div className="glass-card rounded-3xl p-8 space-y-8">
+                    <section>
+                      <h4 className="text-lg font-display font-bold text-white mb-6 flex items-center gap-3">
+                        <Clock className="w-6 h-6 text-blue-400" />
+                        Prazos de Entrega
+                      </h4>
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500 ml-1">Tempo Mínimo (min)</label>
+                          <input 
+                            type="number" 
+                            value={timeLimits.min}
+                            onChange={(e) => setTimeLimits({...timeLimits, min: e.target.value})}
+                            className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-white font-display font-bold focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500 ml-1">Tempo Máximo (min)</label>
+                          <input 
+                            type="number" 
+                            value={timeLimits.max}
+                            onChange={(e) => setTimeLimits({...timeLimits, max: e.target.value})}
+                            className="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-white font-display font-bold focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="pt-8 border-t border-white/5">
+                      <h4 className="text-lg font-display font-bold text-white mb-6 flex items-center gap-3">
+                        <User className="w-6 h-6 text-blue-400" />
+                        Perfil do Estudante
+                      </h4>
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                          <span className="text-sm text-gray-400">Nome de Exibição</span>
+                          <span className="text-sm font-bold text-white">{userNick}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                          <span className="text-sm text-gray-400">RA</span>
+                          <span className="text-sm font-bold text-white">{ra}</span>
+                        </div>
+                      </div>
+                    </section>
+
+                    <button 
+                      onClick={() => {
+                        localStorage.setItem('time_limits', JSON.stringify(timeLimits));
+                        setMessage({ type: 'success', text: 'Configurações salvas!' });
+                      }}
+                      className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-2xl font-bold transition-all shadow-lg shadow-blue-600/20"
+                    >
+                      Salvar Alterações
+                    </button>
                   </div>
-                )}
-              </div>
-            </>
-          )}
-        </main>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </main>
+        </div>
 
         {/* Background Effects */}
         <div className="fixed inset-0 z-0 pointer-events-none">
@@ -597,24 +978,27 @@ export default function App() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
-          className="text-center mb-8"
+          className="text-center mb-12"
         >
-          <div className="inline-flex items-center justify-center p-3 mb-4 rounded-2xl bg-blue-600/10 border border-blue-500/20">
-            <Sparkles className="w-8 h-8 text-blue-400" />
+          <div className="inline-flex items-center justify-center p-4 mb-6 rounded-3xl bg-blue-600/10 border border-blue-500/20 animate-float">
+            <Sparkles className="w-10 h-10 text-blue-400 text-glow" />
           </div>
-          <h1 className="text-4xl md:text-5xl font-display font-bold tracking-tight text-white mb-2">
-            Redação SP <span className="text-blue-500">Astral</span>
+          <h1 className="text-5xl md:text-6xl font-display font-bold tracking-tight text-white mb-3">
+            Redação <span className="text-blue-500">Astral SP</span>
           </h1>
-          <p className="text-gray-400 font-light">Conecte-se ao seu universo de produtividade</p>
+          <p className="text-gray-400 font-medium tracking-wide uppercase text-[10px]">Manifeste sua excelência acadêmica</p>
         </motion.div>
 
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl"
+          className="glass border border-white/10 rounded-[40px] p-10 shadow-2xl relative overflow-hidden"
         >
-          <form onSubmit={handleLogin} className="space-y-6">
+          {/* Decorative light */}
+          <div className="absolute -top-20 -right-20 w-40 h-40 bg-blue-600/20 rounded-full blur-3xl" />
+          
+          <form onSubmit={handleLogin} className="space-y-8 relative z-10">
             <AnimatePresence mode="wait">
               {message && (
                 <motion.div
@@ -622,61 +1006,69 @@ export default function App() {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className={`p-3 rounded-xl text-sm font-medium text-center ${
-                    message.type === 'success' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                  className={`p-4 rounded-2xl text-xs font-bold text-center flex items-center justify-center gap-2 ${
+                    message.type === 'success' ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'
                   }`}
                 >
+                  {message.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
                   {String(message.text)}
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-300 ml-1">RA (Registro Acadêmico)</label>
+            <div className="space-y-3">
+              <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500 ml-1">Registro Acadêmico (RA)</label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-gray-500 group-focus-within:text-blue-400 transition-colors" />
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <User className="h-5 w-5 text-gray-600 group-focus-within:text-blue-400 transition-colors" />
                 </div>
                 <input
                   type="text"
                   value={ra}
                   onChange={(e) => setRa(e.target.value)}
-                  className="block w-full pl-11 pr-4 py-3 bg-black/40 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                  className="block w-full pl-14 pr-5 py-4 bg-black/40 border border-white/5 rounded-2xl text-white placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/30 transition-all font-medium"
                   placeholder="Seu RA (ex: 123456789sp)"
                   required
                 />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-300 ml-1">Senha</label>
+            <div className="space-y-3">
+              <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500 ml-1">Senha de Acesso</label>
               <div className="relative group">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-500 group-focus-within:text-blue-400 transition-colors" />
+                <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+                  <Lock className="h-5 w-5 text-gray-600 group-focus-within:text-blue-400 transition-colors" />
                 </div>
                 <input
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-11 pr-4 py-3 bg-black/40 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                  className="block w-full pl-14 pr-12 py-4 bg-black/40 border border-white/5 rounded-2xl text-white placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/30 transition-all font-medium"
                   placeholder="••••••••"
                   required
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-600 hover:text-blue-400 transition-colors"
+                >
+                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
               </div>
             </div>
 
             <button
               type="submit"
               disabled={isLoading}
-              className="relative w-full group overflow-hidden rounded-xl bg-blue-600 py-3.5 font-semibold text-white transition-all hover:bg-blue-500 active:scale-[0.98] disabled:opacity-70"
+              className="relative w-full group overflow-hidden rounded-2xl bg-blue-600 py-4.5 font-bold text-white transition-all hover:bg-blue-500 active:scale-[0.98] disabled:opacity-70 shadow-xl shadow-blue-600/20"
             >
-              <span className="relative z-10 flex items-center justify-center gap-2">
+              <span className="relative z-10 flex items-center justify-center gap-3">
                 {isLoading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
                   <>
-                    Entrar no Sistema
-                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                    Entrar no Universo
+                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </>
                 )}
               </span>
@@ -687,14 +1079,133 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowSavedModal(true)}
-                className="w-full py-2 text-xs font-bold text-gray-500 hover:text-blue-400 transition-colors flex items-center justify-center gap-2 uppercase tracking-widest"
+                className="w-full py-2 text-[10px] font-bold text-gray-600 hover:text-blue-400 transition-colors flex items-center justify-center gap-2 uppercase tracking-widest"
               >
                 <Save className="w-3.5 h-3.5" />
-                Contas Salvas
+                Contas Salvas ({savedAccounts.length})
               </button>
             )}
           </form>
         </motion.div>
+
+      {/* Selection Modal (Batch Processing) */}
+      <AnimatePresence mode="wait">
+        {showSelectionModal && (
+          <div key="selection-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/90 backdrop-blur-md">
+            <motion.div
+              key="selection-modal-content"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="glass border border-white/10 rounded-[40px] p-10 max-w-2xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              <div className="flex justify-between items-start mb-8">
+                <div>
+                  <h3 className="text-3xl font-display font-bold text-white mb-2">Processamento Astral</h3>
+                  <p className="text-gray-400 text-sm">Selecione as redações para manifestação automática via IA.</p>
+                </div>
+                <button 
+                  onClick={() => !isBatchProcessing && setShowSelectionModal(false)} 
+                  className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-500 hover:text-white"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              {isBatchProcessing && (
+                <div className="mb-8 space-y-3">
+                  <div className="flex justify-between text-xs font-bold uppercase tracking-widest">
+                    <span className="text-blue-400">Progresso da Manifestação</span>
+                    <span className="text-gray-500">{batchProgress.current} / {batchProgress.total}</span>
+                  </div>
+                  <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                      className="h-full bg-blue-600 shadow-[0_0_15px_rgba(59,130,246,0.5)]"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between mb-6 px-2">
+                <button 
+                  onClick={selectAllEssays}
+                  disabled={isBatchProcessing}
+                  className="text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors uppercase tracking-widest disabled:opacity-50"
+                >
+                  {selectedEssays.size === aggregatedEssays.length ? 'Desmarcar Todas' : 'Selecionar Todas'}
+                </button>
+                <span className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">
+                  {selectedEssays.size} selecionadas
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-3 pr-4 custom-scrollbar mb-8">
+                {aggregatedEssays.map((essay) => (
+                  <div 
+                    key={essay.id}
+                    onClick={() => !isBatchProcessing && toggleEssaySelection(essay.id)}
+                    className={`flex items-center gap-5 p-5 rounded-3xl border transition-all ${
+                      isBatchProcessing ? 'cursor-default' : 'cursor-pointer'
+                    } ${
+                      selectedEssays.has(essay.id) 
+                        ? 'bg-blue-600/10 border-blue-500/30' 
+                        : 'bg-white/5 border-white/5 hover:bg-white/10'
+                    }`}
+                  >
+                    <div className={`w-6 h-6 rounded-xl border flex items-center justify-center transition-all ${
+                      selectedEssays.has(essay.id) ? 'bg-blue-600 border-blue-500 shadow-lg shadow-blue-600/20' : 'border-white/10'
+                    }`}>
+                      {selectedEssays.has(essay.id) && <CheckCircle2 className="w-4 h-4 text-white" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-bold text-white truncate">{essay.title}</h4>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className="text-[9px] text-gray-600 font-bold uppercase tracking-widest">ID: {essay.id}</span>
+                        <span className="text-[9px] text-blue-400 font-bold uppercase tracking-widest">• {essay.publication_target}</span>
+                        <span className={`text-[9px] font-bold uppercase tracking-widest ${essay.answer_status === 'draft' ? 'text-amber-500' : 'text-blue-500'}`}>
+                          • {essay.answer_status === 'draft' ? 'Rascunho' : 'Pendente'}
+                        </span>
+                      </div>
+                    </div>
+                    {batchStatus[essay.id] && (
+                      <div className="flex items-center gap-2">
+                        {batchStatus[essay.id] === 'processing' && <Loader2 className="w-5 h-5 animate-spin text-blue-500" />}
+                        {batchStatus[essay.id] === 'success' && <CheckCircle2 className="w-5 h-5 text-green-500" />}
+                        {batchStatus[essay.id] === 'error' && <AlertCircle className="w-5 h-5 text-red-500" />}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {aggregatedEssays.length === 0 && (
+                  <div className="py-20 text-center text-gray-500">
+                    Nenhuma redação encontrada para processamento.
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleBatchProcess}
+                disabled={isBatchProcessing || selectedEssays.size === 0}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-5 rounded-3xl transition-all shadow-xl shadow-blue-600/20 flex items-center justify-center gap-4 active:scale-[0.98]"
+              >
+                {isBatchProcessing ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    Manifestando...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-6 h-6" />
+                    Salvar como Rascunho ({selectedEssays.size})
+                  </>
+                )}
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
         {/* Saved Accounts Modal */}
         <AnimatePresence mode="wait">

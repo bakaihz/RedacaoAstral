@@ -15,8 +15,8 @@ async function startServer() {
   // Helper for official API calls
   const callOfficialApi = async (url: string, method: string, token: string, body?: any) => {
     const domains = [
-      'https://api.educacao.sp.gov.br',
       'https://edusp-api.ip.tv',
+      'https://api.educacao.sp.gov.br',
       'https://shuziroastralhub.onrender.com'
     ];
     
@@ -43,7 +43,11 @@ async function startServer() {
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
       };
 
-      const options: any = { method, headers };
+      const options: any = { 
+        method, 
+        headers,
+        signal: AbortSignal.timeout(20000) // Increased to 20s
+      };
       if (body) options.body = JSON.stringify(body);
 
       try {
@@ -55,7 +59,7 @@ async function startServer() {
           if (text.includes('cloudflare') || text.includes('challenge')) {
             console.warn(`[API Blocked] Cloudflare challenge detected on ${domain}`);
           }
-          lastError = { status: 403, message: "Acesso bloqueado pela proteção anti-bot." };
+          lastError = { status: 403, message: `Acesso bloqueado pela proteção anti-bot em ${domain}.` };
           continue;
         }
 
@@ -66,8 +70,11 @@ async function startServer() {
         
         return await response.json();
       } catch (error: any) {
-        console.error(`[API Failed] ${targetUrl}`, error.message || error);
-        lastError = error;
+        const errorMsg = error.name === 'AbortError' ? 'Tempo limite de conexão excedido.' : (error.message || error);
+        console.warn(`[API Attempt Failed] ${targetUrl}: ${errorMsg}`); // Changed to warn
+        lastError = { status: 500, message: `Erro ao conectar ao domínio ${domain}: ${errorMsg}` };
+        // Small delay before next attempt
+        await new Promise(r => setTimeout(r, 800));
       }
     }
     
@@ -84,8 +91,8 @@ async function startServer() {
     }
 
     const loginDomains = [
-      'https://api.educacao.sp.gov.br/registration/edusp',
       'https://edusp-api.ip.tv/registration/edusp',
+      'https://api.educacao.sp.gov.br/registration/edusp',
       'https://shuziroastralhub.onrender.com/registration/edusp'
     ];
 
@@ -114,20 +121,21 @@ async function startServer() {
             platform: 'webclient',
             id: user,
             password: senha
-          })
+          }),
+          signal: AbortSignal.timeout(20000) // Increased to 20s
         });
 
         if (loginResponse.status === 403) {
           const text = await loginResponse.text();
           console.warn(`[Login 403] Bloqueio detectado em ${url}`);
-          lastError = { status: 403, error: "Acesso bloqueado pela proteção anti-bot. Tentando alternativa..." };
+          lastError = { status: 403, error: `Acesso bloqueado pela proteção anti-bot em ${url}.` };
           continue;
         }
 
         if (!loginResponse.ok) {
           const errorText = await loginResponse.text();
-          console.error(`[Login Error] ${url}: ${loginResponse.status}`);
-          lastError = { status: loginResponse.status, error: loginResponse.status === 401 ? "RA ou Senha incorretos." : "Erro na plataforma oficial." };
+          console.warn(`[Login Attempt Failed] ${url}: ${loginResponse.status}`);
+          lastError = { status: loginResponse.status, error: loginResponse.status === 401 ? "RA ou Senha incorretos." : `Erro na plataforma oficial (${url}): ${loginResponse.status}` };
           if (loginResponse.status === 401) break;
           continue;
         }
@@ -142,8 +150,10 @@ async function startServer() {
           });
         }
       } catch (error: any) {
-        console.error(`[Login Failed] ${url}:`, error.message);
-        lastError = { status: 500, error: "Erro de conexão com a API." };
+        const errorMsg = error.name === 'AbortError' ? 'Tempo limite de conexão excedido.' : (error.message || error);
+        console.warn(`[Login Attempt Failed] ${url}:`, errorMsg);
+        lastError = { status: 500, error: `Erro de conexão com a API (${url}): ${errorMsg}` };
+        await new Promise(r => setTimeout(r, 800));
       }
     }
 
@@ -233,7 +243,7 @@ async function startServer() {
     }
   });
 
-  // 4. Salvar rascunho
+  // 4. Salvar rascunho (Legacy/Internal)
   app.post("/api/salvar/rascunho", async (req, res) => {
     const { task_id, question_id, room_name, token_usuario, titulo, texto } = req.body;
     if (!token_usuario) return res.status(401).json({ error: "Token ausente" });
@@ -254,6 +264,37 @@ async function startServer() {
       res.json({ success: true, data });
     } catch (error: any) {
       res.status(error.status || 500).json({ error: error.message });
+    }
+  });
+
+  // 5. Salvar rascunho (New/Complete) - Matches user request
+  app.post("/api/complete", async (req, res) => {
+    const { task_id, question_id, room_for_apply, auth_token, titulo, texto, answer_id } = req.body;
+    if (!auth_token) return res.status(401).json({ error: "Token ausente" });
+
+    try {
+      const url = `/tms/task/${task_id}/answer`;
+      const payload: any = {
+        room_for_apply: room_for_apply,
+        answers: [
+          {
+            question_id,
+            essay_title: titulo,
+            essay_text: texto
+          }
+        ]
+      };
+      
+      // If answer_id exists, it's an update
+      if (answer_id) {
+        payload.answers[0].answer_id = answer_id;
+      }
+
+      const data = await callOfficialApi(url, 'POST', auth_token, payload);
+      res.json({ success: true, data });
+    } catch (error: any) {
+      console.error(`[Complete Error] Task ${task_id}:`, error.message || error);
+      res.status(error.status || 500).json({ error: error.message || "Erro ao salvar rascunho." });
     }
   });
 
