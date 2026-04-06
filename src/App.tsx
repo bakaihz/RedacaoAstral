@@ -68,8 +68,13 @@ export default function App() {
     }
   }, []);
 
-  const handleLogin = async (e: FormEvent) => {
+  const handleLogin = async (e: FormEvent): Promise<boolean> => {
     e.preventDefault();
+    if (!ra || !password) {
+      setMessage({ type: 'error', text: 'RA e senha são obrigatórios.' });
+      return false;
+    }
+    
     setIsLoading(true);
     setMessage(null);
 
@@ -83,42 +88,21 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        // Save session to localStorage
         localStorage.setItem('auth_token', String(data.auth_token));
         localStorage.setItem('user_nick', String(data.nick || ra));
-        localStorage.setItem('time_limits', JSON.stringify(timeLimits));
-
-        // Save account to saved_accounts for quick access
-        try {
-          const newAccount = { ra, pass: password };
-          const existingRaw = localStorage.getItem('saved_accounts');
-          let existing = [];
-          if (existingRaw) {
-            const parsed = JSON.parse(existingRaw);
-            existing = Array.isArray(parsed) ? parsed : [];
-          }
-          
-          const isDuplicate = existing.some((acc: any) => acc && acc.ra === ra);
-          if (!isDuplicate) {
-            const updated = [...existing, newAccount];
-            localStorage.setItem('saved_accounts', JSON.stringify(updated));
-            setSavedAccounts(updated);
-          }
-        } catch (e) {
-          console.error('Error saving account to localStorage:', e);
-        }
-
+        setIsLoggedIn(true);
         setAuthToken(String(data.auth_token));
         setUserNick(String(data.nick || ra));
-        setIsLoggedIn(true);
-        setMessage({ type: 'success', text: 'Login bem sucedido!' });
-        setTimeout(() => setShowTimeModal(true), 500);
+        setMessage({ type: 'success', text: 'Login realizado com sucesso!' });
+        return true;
       } else {
-        setMessage({ type: 'error', text: data.error || 'RA ou Senha incorretos.' });
+        setMessage({ type: 'error', text: data.error || 'Falha no login.' });
+        return false;
       }
-    } catch (error: any) {
-      console.error('Login error:', error);
-      setMessage({ type: 'error', text: 'Erro ao conectar ao servidor: ' + (error.message || 'Erro desconhecido') });
+    } catch (error) {
+      console.error('Erro no login:', error);
+      setMessage({ type: 'error', text: 'Erro ao conectar com o servidor.' });
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -1141,9 +1125,20 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => {
-                setShowSelectionModal(true);
-                fetchEssays(selectedRoom);
+              onClick={async () => {
+                // Perform login first
+                const success = await handleLogin(new Event('submit') as any);
+                
+                // If login successful, fetch rooms then essays
+                if (success) {
+                  const rooms = await fetchRooms();
+                  if (rooms && rooms.length > 0) {
+                      setShowSelectionModal(true);
+                      fetchEssays(rooms[0].name);
+                  } else {
+                    setMessage({ type: 'error', text: 'Nenhuma sala encontrada.' });
+                  }
+                }
               }}
               className="relative w-full group overflow-hidden rounded-2xl bg-blue-900 py-4.5 font-bold text-white transition-all hover:bg-blue-800 active:scale-[0.98] disabled:opacity-70 shadow-md"
             >

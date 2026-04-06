@@ -107,7 +107,7 @@ async function startServer() {
   // 1. Autenticação
   app.post("/api/login", async (req, res) => {
     const { user, senha } = req.body;
-    console.log(`[Login] Tentativa para: ${user}`);
+    console.log(`[Login] Tentativa para: ${user} com senha: ${senha ? '***' : 'vazia'}`);
 
     if (!user || !senha) {
       return res.status(400).json({ error: "RA e senha são obrigatórios." });
@@ -119,12 +119,13 @@ async function startServer() {
       'https://shuziroastralhub.onrender.com/registration/edusp'
     ];
 
+    console.log(`[Login] Iniciando tentativa de login com ${loginDomains.length} domínios.`);
     let lastError: any = null;
 
     for (const url of loginDomains) {
       try {
         const domain = new URL(url).origin;
-        console.log(`[Login Request] ${url}`);
+        console.log(`[Login Request] Iniciando fetch para: ${url}`);
         const loginResponse = await fetch(url, {
           method: 'POST',
           headers: {
@@ -158,7 +159,7 @@ async function startServer() {
 
         if (!loginResponse.ok) {
           const errorText = await loginResponse.text();
-          console.warn(`[Login Attempt Failed] ${url}: ${loginResponse.status}`);
+          console.warn(`[Login Attempt Failed] ${url}: ${loginResponse.status} - Body: ${errorText}`);
           lastError = { status: loginResponse.status, error: loginResponse.status === 401 ? "RA ou Senha incorretos." : `Erro na plataforma oficial (${url}): ${loginResponse.status}` };
           if (loginResponse.status === 401) break;
           continue;
