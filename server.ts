@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  console.log("[Server] Starting server...");
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -111,6 +112,7 @@ async function startServer() {
 
   // 1. Autenticação
   app.post("/api/login", async (req, res) => {
+    console.log(`[Server] Rota /api/login acessada!`);
     const { user, senha } = req.body;
     console.log(`[Login] Tentativa para: ${user} com senha: ${senha ? '***' : 'vazia'}`);
 

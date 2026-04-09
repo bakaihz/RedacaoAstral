@@ -183,7 +183,7 @@ export default function App() {
         
         try {
           // Try with room name first
-          let response = await fetch(`/api/redacoes/pending?publication_target=${encodeURIComponent(room.name)}&room_id=${encodeURIComponent(room.id)}`, {
+          let response = await fetch(`/api/tms/task/todo?publication_target=${encodeURIComponent(room.name)}`, {
             headers: { 'x-api-key': authToken }
           });
           let data = await response.json();
@@ -192,7 +192,7 @@ export default function App() {
           // If empty, try with room ID as publication_target
           if (essaysArray.length === 0 && room.id) {
             console.log(`[Frontend] Room ${room.name} returned empty, trying with ID: ${room.id}`);
-            response = await fetch(`/api/redacoes/pending?publication_target=${encodeURIComponent(room.id)}`, {
+            response = await fetch(`/api/tms/task/todo?publication_target=${encodeURIComponent(room.id)}`, {
               headers: { 'x-api-key': authToken }
             });
             data = await response.json();
