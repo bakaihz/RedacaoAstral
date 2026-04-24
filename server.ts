@@ -237,43 +237,68 @@ async function startServer() {
          }
       }
 
+      const userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36";
+
       const dom = new JSDOM(gotResponse.body as string, {
         url: "https://saladofuturo.educacao.sp.gov.br/",
         runScripts: "outside-only",
-        pretendToBeVisual: true
-      });
+        pretendToBeVisual: true,
+        userAgent: userAgentString
+      } as any);
 
       const win: any = dom.window;
       win.fetch = fetchWithCookies; // Injeta o fetch protegido por cookies!
 
       console.log(`[Login] Passo 3: Obtendo auth_token oficial da Edusp...`);
-      const vsfApi = await win.fetch("https://edusp-api.ip.tv/registration/edusp/token", {
-        method: "POST",
-        headers: {
-          "accept": "application/json",
-          "content-type": "application/json",
-          "request-id": "|625bd2809ec74cc5bf522f4837291586.34b5d944b713472b",
-          "sec-ch-ua": "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\"",
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": "\"Windows\"",
-          "traceparent": "00-625bd2809ec74cc5bf522f4837291586-34b5d944b713472b-01",
-          "x-api-platform": "webclient",
-          "x-api-realm": "edusp",
-          "user-agent": dom.window.navigator.userAgent
-        },
-        body: JSON.stringify({
-          token: initialToken
-        })
-      });
+      
+      const eduspDomains = [
+        "https://edusp-api.ip.tv",
+        "https://api.educacao.sp.gov.br"
+      ];
+      
+      let lastLoginErrorText = "";
+      let step2Data = null;
+      let successDomain = "";
 
-      if (!vsfApi.ok) {
-        const text = await vsfApi.text();
-        console.error(`[Login] Erro ao obter Token Edusp: ${vsfApi.status} - ${text}`);
-         return res.status(vsfApi.status).json({ error: "Falha na conversão do token da Edusp." });
+      for (const domain of eduspDomains) {
+        console.log(`[Login] Tentando obter token em: ${domain}`);
+        const vsfApi = await win.fetch(`${domain}/registration/edusp/token`, {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "request-id": "|625bd2809ec74cc5bf522f4837291586.34b5d944b713472b",
+            "sec-ch-ua": "\"Not(A:Brand\";v=\"8\", \"Chromium\";v=\"144\", \"Google Chrome\";v=\"144\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "traceparent": "00-625bd2809ec74cc5bf522f4837291586-34b5d944b713472b-01",
+            "x-api-platform": "webclient",
+            "x-api-realm": "edusp",
+            "user-agent": userAgentString,
+            "origin": "https://saladofuturo.educacao.sp.gov.br",
+            "referer": "https://saladofuturo.educacao.sp.gov.br/"
+          },
+          body: JSON.stringify({
+            token: initialToken
+          })
+        });
+
+        if (vsfApi.ok) {
+          step2Data = await vsfApi.json();
+          successDomain = domain;
+          break;
+        } else {
+          lastLoginErrorText = await vsfApi.text();
+          console.warn(`[Login] Falha no domínio ${domain}: ${vsfApi.status}`);
+        }
       }
 
-      const step2Data = await vsfApi.json();
-      console.log(`[Login] Operação Phantom Proxy finalizada com Sucesso!`);
+      if (!step2Data) {
+        console.error(`[Login] Erro ao obter Token Edusp em todos os domínios. Último erro: ${lastLoginErrorText.substring(0, 500)}`);
+        return res.status(403).json({ error: "Falha na conversão do token da Edusp. O acesso foi bloqueado (Cloudflare)." });
+      }
+
+      console.log(`[Login] Operação Phantom Proxy finalizada com Sucesso! (Usando ${successDomain})`);
 
       return res.json({ 
         success: true, 
@@ -353,7 +378,7 @@ async function startServer() {
     if (!contexto) return res.status(400).json({ error: "Contexto ausente" });
 
     try {
-      const apiKey = "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";
+      const apiKey = (process.env.OPENROUTER_API_KEY || "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").trim();
       console.log(`[OpenRouter] Call starting. Key: ${apiKey.substring(0, 10)}...`);
 
       const openrouter = new OpenRouter({
@@ -361,8 +386,10 @@ async function startServer() {
       });
 
       const response = await openrouter.chat.send({
+        httpReferer: 'https://saladofuturo.educacao.sp.gov.br/',
+        appTitle: 'Astral SP',
         chatRequest: {
-          model: "google/gemini-2.5-flash",
+          model: "google/gemma-3-27b-it:free",
           messages: [
             {
               role: "user",
@@ -410,8 +437,8 @@ async function startServer() {
       
       const payload: any = {
         room_for_apply: room_name,
-        accessed_on: "room",
-        executed_on: "00:05:00",
+        accessed_on: req.body.apply_moment || new Date(Date.now() - 5*60000).toISOString(),
+        executed_on: new Date().toISOString(),
         answers: {
           [String(question_id)]: {
             question_id: question_id,
@@ -440,8 +467,8 @@ async function startServer() {
       
       const payload: any = {
         room_for_apply: room_for_apply,
-        accessed_on: "room",
-        executed_on: "00:05:00",
+        accessed_on: req.body.apply_moment || new Date(Date.now() - 5*60000).toISOString(),
+        executed_on: new Date().toISOString(),
         answers: {
           [qIdStr]: {
             question_id: parseInt(qIdStr),
