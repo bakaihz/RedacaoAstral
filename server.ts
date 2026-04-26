@@ -55,20 +55,13 @@ async function startServer() {
       
       const headers: any = {
         'accept': 'application/json, text/plain, */*',
-        'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
         'content-type': 'application/json',
-        'sec-ch-ua': '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'cross-site',
         'x-api-key': token,
         'x-api-platform': 'webclient',
         'x-api-realm': 'edusp',
         'origin': domain,
         'referer': `${domain}/`,
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
       };
 
       const options: any = { 
@@ -80,7 +73,7 @@ async function startServer() {
 
       try {
         console.log(`[API Request] ${method} ${targetUrl}`);
-        const response = await fetch(targetUrl, options);
+        const response = await undiciFetch(targetUrl, options);
         
         const contentType = response.headers.get("content-type");
         console.log(`[API Response] ${targetUrl}: ${response.status} Content-Type: ${contentType}`);
