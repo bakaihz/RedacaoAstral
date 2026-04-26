@@ -61,7 +61,7 @@ async function startServer() {
         'x-api-realm': 'edusp',
         'origin': domain,
         'referer': `${domain}/`,
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
+        'user-agent': 'Dalvik/2.1.0 (Linux; U; Android 11; SM-G991B Build/RP1A.200720.012)'
       };
 
       const options: any = { 
@@ -268,7 +268,7 @@ async function startServer() {
               "traceparent": "00-625bd2809ec74cc5bf522f4837291586-34b5d944b713472b-01",
               "x-api-platform": "webclient",
               "x-api-realm": "edusp",
-              "user-agent": userAgentString,
+              "user-agent": "Dalvik/2.1.0 (Linux; U; Android 11; SM-G991B Build/RP1A.200720.012)",
               "origin": "https://saladofuturo.educacao.sp.gov.br",
               "referer": "https://saladofuturo.educacao.sp.gov.br/"
             },
