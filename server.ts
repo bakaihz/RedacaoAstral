@@ -41,6 +41,12 @@ async function startServer() {
     }
   });
 
+  // Helper para construir a URL usando o TUNNEL_URL
+  const buildProxyUrl = (targetUrl: string) => {
+    const tunnelUrl = process.env.TUNNEL_URL || "https://cloud-tunnel.davilucas99kk.workers.dev/?url=";
+    return `${tunnelUrl}${encodeURIComponent(targetUrl)}`;
+  };
+
   // Helper for official API calls
   const callOfficialApi = async (url: string, method: string, token: string, body?: any) => {
     const domains = [
@@ -52,6 +58,7 @@ async function startServer() {
     
     for (const domain of domains) {
       const targetUrl = url.startsWith('http') ? url : `${domain}${url}`;
+      const finalRequestUrl = buildProxyUrl(targetUrl);
       
       const headers: any = {
         'accept': 'application/json, text/plain, */*',
@@ -72,8 +79,9 @@ async function startServer() {
       if (body) options.body = JSON.stringify(body);
 
       try {
-        console.log(`[API Request] ${method} ${targetUrl}`);
-        const response = await undiciFetch(targetUrl, options);
+        console.log(`[API Request] ${method} ${finalRequestUrl}`);
+        const response = await undiciFetch(finalRequestUrl, options);
+
         
         const contentType = response.headers.get("content-type");
         console.log(`[API Response] ${targetUrl}: ${response.status} Content-Type: ${contentType}`);
@@ -137,9 +145,10 @@ async function startServer() {
 
       const fetchWithCookies = async (url: string | URL, options: any = {}) => {
         const urlStr = url.toString();
+        const requestUrl = buildProxyUrl(urlStr);
         const cookieString = await cookieJar.getCookieString(urlStr);
 
-        const res = await undiciFetch(urlStr, {
+        const res = await undiciFetch(requestUrl, {
           ...options,
           headers: {
             ...(options.headers || {}),
@@ -160,8 +169,11 @@ async function startServer() {
 
       // ==== PASSO 1: Obter Token Inicial do Salado Futuro ====
       console.log(`[Login] Passo 1: Autenticando com Token Completo...`);
+      const step1TargetUrl = "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken";
+      const step1RequestUrl = buildProxyUrl(step1TargetUrl);
+
       const step1Response = await undiciFetch(
-        "https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken",
+        step1RequestUrl,
         {
           method: "POST",
           headers: {
@@ -202,7 +214,10 @@ async function startServer() {
 
       // ==== PASSO 2: Simular Navegador com JSDOM e Got ====
       console.log(`[Login] Passo 2: Inicializando simulador AntiBot (JSDOM)...`);
-      const gotResponse = await got("https://saladofuturo.educacao.sp.gov.br/login", {
+      const step2TargetUrl = "https://saladofuturo.educacao.sp.gov.br/login";
+      const step2RequestUrl = buildProxyUrl(step2TargetUrl);
+
+      const gotResponse = await got(step2RequestUrl, {
         throwHttpErrors: false,
         http2: false,
         headers: {
