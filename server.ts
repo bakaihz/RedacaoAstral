@@ -213,7 +213,14 @@ async function startServer() {
         });
       }
 
-      const loginData = await step1Response.json() as any;
+      let loginData;
+      try {
+        const textResponse = await step1Response.text();
+        loginData = JSON.parse(textResponse);
+      } catch (e) {
+        console.error("[Login] Erro ao analisar resposta do Passo 1: ", e);
+        return res.status(500).json({ error: "Erro ao se comunicar com a SED. A resposta não estava no formato incorreto" });
+      }
       const initialToken = loginData.token || loginData.access_token;
       console.log(`[Login] Passo 1 concluído, token inicial capturado.`);
 
